@@ -118,14 +118,6 @@ object "OpcodeLib" {
                 return(0, 32)
             }
 
-            // nonceKeyLoad(uint256) -> 0x32ee5cec. NONCEKEYLOAD (0xB9). Stack: [index].
-            case 0x32ee5cec {
-                let index := calldataload(4)
-                let value := verbatim_1i_1o(hex"B9", index)
-                mstore(0, value)
-                return(0, 32)
-            }
-
             // sigDataCopy(uint256,uint256,uint256) -> 0x9b547936. SIGDATACOPY (0xBA). Stack: [memOffset, dataOffset, length, signatureIndex]. ARBITRARY-scheme signatures only.
             case 0x9b547936 {
                 let dataOffset := calldataload(4)
@@ -133,6 +125,13 @@ object "OpcodeLib" {
                 let signatureIndex := calldataload(68)
                 verbatim_4i_0o(hex"BA", 0, dataOffset, length, signatureIndex)
                 return(0, length)
+            }
+
+            // slotNumber() -> 0x37cda272. SLOTNUM (0x4B). Stack: [].
+            case 0x37cda272 {
+                let value := verbatim_0i_1o(hex"4B")
+                mstore(0, value)
+                return(0, 32)
             }
 
             default { revert(0, 0) }

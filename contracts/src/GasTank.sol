@@ -29,8 +29,23 @@ contract GasTank {
 
     MerkleTree.Tree private tree;
 
-    event Deposit(address indexed owner, uint256 amount, bytes32 salt, uint256 index, bytes32 newRoot);
-    event Spend(address indexed owner, uint256 newAmount, bytes32 newSalt, uint256 index, bytes32 newRoot);
+    /// The leaf commitment appended by every Merkle tree insert.
+    bytes32[] public commitments;
+
+    /// Each owner's current note.
+    ///
+    /// @dev If a user deposits multiple notes, only the most recent is stored here.
+    struct Note {
+        uint256 amount;
+        bytes32 salt;
+    }
+    mapping(address => Note) public notes;
+
+    /// The slot number at which `root()` was last published via
+    /// `FrameOps.publishRecentRoot`.
+    uint256 public lastRootSlot;
+
+    event Commit(address indexed owner, uint256 amount, bytes32 salt, uint256 index, bytes32 newRoot);
 
     constructor(address _opcodeLib, uint256 _fee) {
         opcodeLib = _opcodeLib;
@@ -41,9 +56,7 @@ contract GasTank {
     /// Deposits ETH into the GasTank, creating a new note for `owner` with the
     /// given `salt`.
     function deposit(address owner, bytes32 salt) external payable {
-        uint256 index = tree.insert(_leaf(owner, msg.value, salt));
-        FrameOps.publishRecentRoot(SOURCE_SALT, tree.root);
-        emit Deposit(owner, msg.value, salt, index, tree.root);
+        _recordCommitment(owner, msg.value, salt);
     }
 
     /// Verifies that the note can be spent and approves the transaction for payment.
@@ -96,9 +109,7 @@ contract GasTank {
         uint256 amount = opcodeLib.frameDataLoad(36, prevIndex);
 
         uint256 newAmount = amount - opcodeLib.txParam(0x06) - FEE;
-        uint256 index = tree.insert(_leaf(owner, newAmount, newSalt));
-        FrameOps.publishRecentRoot(SOURCE_SALT, tree.root);
-        emit Spend(owner, newAmount, newSalt, index, tree.root);
+        _recordCommitment(owner, newAmount, newSalt);
     }
 
     /// Executes a value-less call to `target` with `data`.
@@ -112,6 +123,7 @@ contract GasTank {
     /// @dev Can be used if the tree's root has timed out of the recent roots.
     function refreshRoot() external {
         FrameOps.publishRecentRoot(SOURCE_SALT, tree.root);
+        lastRootSlot = opcodeLib.slotNumber();
     }
 
     /// Returns the current Merkle root of the GasTank's note tree.
@@ -122,6 +134,18 @@ contract GasTank {
     /// Returns the next leaf index that will be used for a new deposit.
     function nextLeafIndex() external view returns (uint256) {
         return tree.nextLeafIndex;
+    }
+
+    /// Records a new commitment in the Merkle tree, publishing the new root as a recent root.
+    function _recordCommitment(address owner, uint256 amount, bytes32 salt) private {
+        bytes32 leaf = _leaf(owner, amount, salt);
+        uint256 index = tree.insert(leaf);
+        commitments.push(leaf);
+        notes[owner] = Note({amount: amount, salt: salt});
+        FrameOps.publishRecentRoot(SOURCE_SALT, tree.root);
+        lastRootSlot = opcodeLib.slotNumber();
+
+        emit Commit(owner, amount, salt, index, tree.root);
     }
 
     /// Verifies that the note can be spent, and that the transaction is authorized to spend it.
@@ -147,7 +171,7 @@ contract GasTank {
         uint256 maxCost = opcodeLib.txParam(0x06);
         require(amount >= maxCost + fee, "GasTank: insufficient note balance");
 
-        require(opcodeLib.nonceKeyLoad(0) == uint256(leaf), "GasTank: note not nullified");
+        require(opcodeLib.txParam(0x10) == uint256(leaf), "GasTank: note not nullified");
     }
 
     /// Requires that the frames after `selfIndex` are allowed frames.

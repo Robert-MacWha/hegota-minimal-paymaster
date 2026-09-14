@@ -96,17 +96,17 @@ library FrameOps {
         return abi.decode(_call(opcodeLib, abi.encodeCall(IOpcodeLib.txDiff, (param, addr, in3))), (uint256));
     }
 
-    /// Reads the sequence value of one of the account's keyed nonces.
-    function nonceKeyLoad(address opcodeLib, uint256 index) internal returns (uint256) {
-        return abi.decode(_call(opcodeLib, abi.encodeCall(IOpcodeLib.nonceKeyLoad, (index))), (uint256));
-    }
-
     /// Reads an ARBITRARY-scheme signature's raw bytes.
     function sigDataCopy(address opcodeLib, uint256 dataOffset, uint256 length, uint256 signatureIndex)
         internal
         returns (bytes memory)
     {
         return _call(opcodeLib, abi.encodeCall(IOpcodeLib.sigDataCopy, (dataOffset, length, signatureIndex)));
+    }
+
+    /// Reads the current block's slot number (EIP-7843 SLOTNUM).
+    function slotNumber(address opcodeLib) internal returns (uint256) {
+        return abi.decode(_call(opcodeLib, abi.encodeCall(IOpcodeLib.slotNumber, ())), (uint256));
     }
 
     function _call(address opcodeLib, bytes memory data) private returns (bytes memory) {

@@ -25,7 +25,7 @@ interface IOpcodeLib {
 
     function txDiff(uint256 param, uint256 addr, uint256 in3) external returns (uint256);
 
-    function nonceKeyLoad(uint256 index) external returns (uint256);
-
     function sigDataCopy(uint256 dataOffset, uint256 length, uint256 signatureIndex) external returns (bytes memory);
+
+    function slotNumber() external returns (uint256);
 }

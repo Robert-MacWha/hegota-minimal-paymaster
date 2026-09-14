@@ -6,9 +6,12 @@ edition = "2024"
 [dependencies]
 ethrex-rpc = { git = "https://github.com/lambdaclass/ethrex", branch = "hegota-testnet" }
 ethrex-common = { git = "https://github.com/lambdaclass/ethrex", branch = "hegota-testnet" }
+ethrex-sdk = { git = "https://github.com/lambdaclass/ethrex", branch = "hegota-testnet" }
+ethrex-l2-common = { git = "https://github.com/lambdaclass/ethrex", branch = "hegota-testnet" }
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive", "env"] }
 hex = "0.4"
+rand = "0.8"
 secp256k1 = "0.30.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
