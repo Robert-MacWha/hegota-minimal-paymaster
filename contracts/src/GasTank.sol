@@ -24,7 +24,6 @@ contract GasTank {
     bytes32 constant SOURCE_SALT = bytes32(0);
 
     address public immutable opcodeLib;
-    uint256 public immutable FEE;
     bytes32 public immutable SOURCE_ID;
 
     MerkleTree.Tree private tree;
@@ -47,9 +46,8 @@ contract GasTank {
 
     event Commit(address indexed owner, uint256 amount, bytes32 salt, uint256 index, bytes32 newRoot);
 
-    constructor(address _opcodeLib, uint256 _fee) {
+    constructor(address _opcodeLib) {
         opcodeLib = _opcodeLib;
-        FEE = _fee;
         SOURCE_ID = keccak256(abi.encodePacked(address(this), SOURCE_SALT));
     }
 
@@ -69,7 +67,7 @@ contract GasTank {
         uint256 rootRefIndex,
         uint256 sigIndex
     ) external {
-        _verify(owner, amount, salt, leafIndex, proof, rootRefIndex, sigIndex, FEE);
+        _verify(owner, amount, salt, leafIndex, proof, rootRefIndex, sigIndex);
         _requireSettleThenExecuteFollows(opcodeLib.txParam(0x0A));
         opcodeLib.approve(FrameOps.Scope.ExecutionAndPayment);
     }
@@ -86,7 +84,7 @@ contract GasTank {
         uint256 rootRefIndex,
         uint256 sigIndex
     ) external {
-        _verify(owner, amount, salt, leafIndex, proof, rootRefIndex, sigIndex, FEE);
+        _verify(owner, amount, salt, leafIndex, proof, rootRefIndex, sigIndex);
 
         (bool success,) = to.call{value: amount}("");
         require(success, "GasTank: transfer failed");
@@ -108,7 +106,7 @@ contract GasTank {
         address owner = address(uint160(opcodeLib.frameDataLoad(4, prevIndex)));
         uint256 amount = opcodeLib.frameDataLoad(36, prevIndex);
 
-        uint256 newAmount = amount - opcodeLib.txParam(0x06) - FEE;
+        uint256 newAmount = amount - opcodeLib.txParam(0x06);
         _recordCommitment(owner, newAmount, newSalt);
     }
 
@@ -156,8 +154,7 @@ contract GasTank {
         uint256 leafIndex,
         bytes32[] calldata proof,
         uint256 rootRefIndex,
-        uint256 sigIndex,
-        uint256 fee
+        uint256 sigIndex
     ) private {
         bytes32 leaf = _leaf(owner, amount, salt);
 
@@ -169,7 +166,7 @@ contract GasTank {
         require(MerkleTree.verifyProof(leaf, leafIndex, proof, refRoot), "GasTank: bad proof");
 
         uint256 maxCost = opcodeLib.txParam(0x06);
-        require(amount >= maxCost + fee, "GasTank: insufficient note balance");
+        require(amount >= maxCost, "GasTank: insufficient note balance");
 
         require(opcodeLib.txParam(0x10) == uint256(leaf), "GasTank: note not nullified");
     }
