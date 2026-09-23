@@ -1,17 +1,51 @@
+mod convert;
+mod gastank;
+mod merkle;
+mod trace;
+
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use ethrex_common::types::{Frame, FrameMode, RecentRootReference, frame_tx_nonce_manager};
+use convert::{parse_hex_bytes, parse_wei};
+use ethrex_common::types::{
+    FRAME_TX_RECENT_ROOT_USABLE_WINDOW, Frame, FrameMode, RecentRootReference,
+    frame_tx_nonce_manager,
+};
 use ethrex_common::utils::keccak;
 use ethrex_common::{Address, Bytes, H256, U256};
 use ethrex_rpc::EthClient;
 use ethrex_rpc::types::block_identifier::{BlockIdentifier, BlockTag};
-use hegota_minimal_erc20_paymaster::convert::{parse_hex_bytes, parse_wei};
-use hegota_minimal_erc20_paymaster::{
-    FrameTxSpec, address_from_secret_key, gastank, merkle, parse_secret_key, self_verify_frame,
+use frame_tx::{
+    FrameTxSpec, address_from_secret_key, parse_secret_key, recent_root_frame, self_verify_frame,
     send_frame_tx, sender_frame,
 };
 use secp256k1::SecretKey;
 use url::Url;
+
+/// Execution-gas limits for the frames of a validation prefix. EIP-8141 caps
+/// their sum -- the EIP-8272 recent-root verifier frame included -- plus
+/// `signature_verification_cost()` (2800 for one secp256k1 signature) at
+/// `MAX_VERIFY_GAS`, which ethrex defaults to 100_000.
+const SELF_VERIFY_GAS: u64 = 30_000;
+const GAS_TANK_VERIFY_GAS: u64 = 85_000;
+const RECENT_ROOT_FRAME_GAS: u64 = 8_000;
+
+/// EIP-8037 state gas is a separate dimension from execution gas, charged at
+/// `STATE_BYTES_PER_STORAGE_SET * cost_per_state_byte` (64 * 1530 = 97_920) for
+/// every storage slot a frame takes from zero to non-zero. Recording a
+/// commitment writes the note, the commitments array, the touched Merkle
+/// subtrees and the recent-root ring entry, so the first deposit into a fresh
+/// tank fills all twenty subtree slots at once.
+const DEPOSIT_STATE_GAS: u64 = 3_000_000;
+const SETTLE_STATE_GAS: u64 = 1_000_000;
+
+/// EIP-8250: the frame that APPROVEs payment pays, out of its own
+/// `limits.state`, one storage set for every keyed nonce the transaction uses
+/// for the first time. Spending a note uses a nonce key derived from its leaf,
+/// so that slot is always fresh; declaring no state budget there halts the
+/// frame and the node rejects the transaction as a reverted validation prefix.
+/// Key 0 (`deposit`, `refresh-root`) is the account's own nonce and owes
+/// nothing while the account already exists.
+const KEYED_NONCE_STATE_GAS: u64 = 97_920;
 
 #[derive(Parser)]
 struct Cli {
@@ -32,6 +66,8 @@ enum Command {
     /// Publish a fresh recent Merkle root, so `execute`/`withdraw` have a
     /// non-stale root to spend against.
     RefreshRoot(RefreshRootArgs),
+    /// Summarize a transaction: its frames, their gas, and a call tree.
+    Trace(TraceArgs),
 }
 
 #[derive(Args)]
@@ -95,6 +131,15 @@ struct ConnArgs {
     gas_tank_address: Address,
 }
 
+#[derive(Args)]
+struct TraceArgs {
+    /// JSON-RPC endpoint of a frame-tx-capable ethrex node
+    #[arg(long, env = "RPC_URL")]
+    rpc_url: Url,
+    /// Hash of the transaction to summarize
+    tx_hash: H256,
+}
+
 /// Everything needed to authorize spending a note: the note itself, its
 /// Merkle inclusion proof, and a fresh-enough recent-root reference.
 struct SpendContext {
@@ -146,7 +191,7 @@ async fn prepare_spend(
     let age = current_slot
         .checked_sub(slot)
         .context("stored root slot is ahead of the latest block")?;
-    if !(1..=8191).contains(&age) {
+    if !(1..=FRAME_TX_RECENT_ROOT_USABLE_WINDOW).contains(&age) {
         bail!("stored recent root is stale ({age} slots old) -- run `refresh-root` first");
     }
 
@@ -194,6 +239,7 @@ async fn main() -> Result<()> {
         Command::Execute(args) => cmd_execute(args).await,
         Command::Withdraw(args) => cmd_withdraw(args).await,
         Command::RefreshRoot(args) => cmd_refresh_root(args).await,
+        Command::Trace(args) => cmd_trace(args).await,
     }
 }
 
@@ -235,15 +281,15 @@ async fn cmd_deposit(args: DepositArgs) -> Result<()> {
             nonce_keys: vec![U256::zero()],
             nonce_seq: nonce,
             frames: vec![
-                self_verify_frame(depositor, 300_000),
+                self_verify_frame(depositor, SELF_VERIFY_GAS, 0),
                 sender_frame(
                     gas_tank,
                     args.amount_wei,
                     gastank::encode_deposit(owner, salt)?,
-                    8_000_000,
+                    1_000_000,
+                    DEPOSIT_STATE_GAS,
                 ),
             ],
-            recent_root_references: vec![],
         },
         "deposit",
     )
@@ -263,13 +309,27 @@ async fn cmd_execute(args: ExecuteArgs) -> Result<()> {
     let spend = prepare_spend(&client, gas_tank, owner).await?;
     let nonce_seq = ensure_note_unspent(&client, gas_tank, spend.leaf).await?;
 
-    let mut verify_frame = self_verify_frame(gas_tank, 300_000);
+    // EIP-8272: the roots this transaction may reference are the data of a
+    // dedicated VERIFY frame, which must come first. `verify()` reads the
+    // tuple back out of frame 0 rather than from the old envelope field.
+    let root_frame = recent_root_frame(
+        &[RecentRootReference {
+            source_id: H256(spend.source_id),
+            slot: spend.slot,
+            root: H256(spend.root),
+        }],
+        RECENT_ROOT_FRAME_GAS,
+    );
+    const ROOT_FRAME_INDEX: u64 = 0;
+
+    let mut verify_frame = self_verify_frame(gas_tank, GAS_TANK_VERIFY_GAS, KEYED_NONCE_STATE_GAS);
     verify_frame.data = gastank::encode_verify(
         owner,
         spend.amount,
         spend.salt,
         spend.leaf_index,
         &spend.proof,
+        U256::from(ROOT_FRAME_INDEX),
         U256::zero(),
         U256::zero(),
     )?;
@@ -278,7 +338,8 @@ async fn cmd_execute(args: ExecuteArgs) -> Result<()> {
         mode: FrameMode::Sender as u8,
         flags: 0,
         target: Some(gas_tank),
-        gas_limit: 8_000_000,
+        gas_limit: 500_000,
+        state_gas_limit: SETTLE_STATE_GAS,
         value: U256::zero(),
         data: gastank::encode_settle(new_salt)?,
     };
@@ -288,6 +349,7 @@ async fn cmd_execute(args: ExecuteArgs) -> Result<()> {
         U256::zero(),
         gastank::encode_execute(args.target, &args.data)?,
         1_500_000,
+        500_000,
     );
 
     send_frame_tx(
@@ -297,12 +359,7 @@ async fn cmd_execute(args: ExecuteArgs) -> Result<()> {
             sender: gas_tank,
             nonce_keys: vec![U256::from_big_endian(&spend.leaf)],
             nonce_seq,
-            frames: vec![verify_frame, settle_frame, execute_frame],
-            recent_root_references: vec![RecentRootReference {
-                source_id: H256(spend.source_id),
-                slot: spend.slot,
-                root: H256(spend.root),
-            }],
+            frames: vec![root_frame, verify_frame, settle_frame, execute_frame],
         },
         "execute",
     )
@@ -327,11 +384,22 @@ async fn cmd_withdraw(args: WithdrawArgs) -> Result<()> {
     let spend = prepare_spend(&client, gas_tank, owner).await?;
     let nonce_seq = ensure_note_unspent(&client, owner, spend.leaf).await?;
 
+    let root_frame = recent_root_frame(
+        &[RecentRootReference {
+            source_id: H256(spend.source_id),
+            slot: spend.slot,
+            root: H256(spend.root),
+        }],
+        RECENT_ROOT_FRAME_GAS,
+    );
+    const ROOT_FRAME_INDEX: u64 = 0;
+
     let withdraw_frame = Frame {
         mode: FrameMode::Default as u8,
         flags: 0,
         target: Some(gas_tank),
         gas_limit: 3_000_000,
+        state_gas_limit: 500_000,
         value: U256::zero(),
         data: gastank::encode_withdraw(
             args.to,
@@ -340,6 +408,7 @@ async fn cmd_withdraw(args: WithdrawArgs) -> Result<()> {
             spend.salt,
             spend.leaf_index,
             &spend.proof,
+            U256::from(ROOT_FRAME_INDEX),
             U256::zero(),
             U256::zero(),
         )?,
@@ -352,12 +421,11 @@ async fn cmd_withdraw(args: WithdrawArgs) -> Result<()> {
             sender: owner,
             nonce_keys: vec![U256::from_big_endian(&spend.leaf)],
             nonce_seq,
-            frames: vec![self_verify_frame(owner, 300_000), withdraw_frame],
-            recent_root_references: vec![RecentRootReference {
-                source_id: H256(spend.source_id),
-                slot: spend.slot,
-                root: H256(spend.root),
-            }],
+            frames: vec![
+                root_frame,
+                self_verify_frame(owner, SELF_VERIFY_GAS, KEYED_NONCE_STATE_GAS),
+                withdraw_frame,
+            ],
         },
         "withdraw",
     )
@@ -385,19 +453,24 @@ async fn cmd_refresh_root(args: RefreshRootArgs) -> Result<()> {
             nonce_keys: vec![U256::zero()],
             nonce_seq: nonce,
             frames: vec![
-                self_verify_frame(sender, 300_000),
+                self_verify_frame(sender, SELF_VERIFY_GAS, 0),
                 sender_frame(
                     gas_tank,
                     U256::zero(),
                     gastank::encode_refresh_root()?,
                     500_000,
+                    500_000,
                 ),
             ],
-            recent_root_references: vec![],
         },
         "refresh-root",
     )
     .await?;
 
     Ok(())
+}
+
+async fn cmd_trace(args: TraceArgs) -> Result<()> {
+    let client = EthClient::new(args.rpc_url).context("failed to connect to provider")?;
+    trace::print_trace(&client, args.tx_hash).await
 }

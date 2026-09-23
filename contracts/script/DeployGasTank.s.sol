@@ -11,17 +11,14 @@ import {DeployOpcodeLibScript} from "./DeployOpcodeLib.s.sol";
 ///     --private-key $PRIVATE_KEY --broadcast
 contract DeployGasTankScript is Script {
     function run() external {
-        uint256 fee = vm.envUint("FEE");
-
         address opcodeLib = new DeployOpcodeLibScript().run();
 
         vm.startBroadcast();
 
-        GasTank gasTank = new GasTank(opcodeLib, fee);
+        GasTank gasTank = new GasTank(opcodeLib);
 
         vm.stopBroadcast();
 
-        console.log("opcodeLib:", opcodeLib);
         console.log("gasTank:", address(gasTank));
     }
 }

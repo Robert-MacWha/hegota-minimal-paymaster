@@ -1,0 +1,12 @@
+[package]
+name = "frame-tx"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ethrex-rpc = { git = "https://github.com/lambdaclass/ethrex", branch = "hegota-testnet" }
+ethrex-common = { git = "https://github.com/lambdaclass/ethrex", branch = "hegota-testnet" }
+ethrex-sdk = { git = "https://github.com/lambdaclass/ethrex", branch = "hegota-testnet" }
+anyhow = "1.0.104"
+hex = "0.4"
+secp256k1 = "0.30.0"

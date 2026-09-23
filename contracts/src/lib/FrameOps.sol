@@ -8,6 +8,14 @@ import {IOpcodeLib} from "../interfaces/IOpcodeLib.sol";
 library FrameOps {
     address internal constant RECENT_ROOT_ADDRESS = 0x0000000000000000000000000000000000008272;
 
+    /// EIP-8272 `RECENT_ROOT_TUPLE_BYTES`: one packed
+    /// `source_id(32) || uint64_be(slot) || root(32)` reference.
+    uint256 internal constant RECENT_ROOT_TUPLE_BYTES = 72;
+    /// EIP-8272 `MAX_RECENT_ROOT_REFERENCES`.
+    uint256 internal constant MAX_RECENT_ROOT_REFERENCES = 16;
+    /// EIP-8141 `FrameMode::Verify`, as reported by `FRAMEPARAM` param `0x02`.
+    uint256 internal constant VERIFY_MODE = 1;
+
     enum Scope {
         None,
         Payment,
@@ -67,9 +75,55 @@ library FrameOps {
         return abi.decode(_call(opcodeLib, abi.encodeCall(IOpcodeLib.sigParam, (signatureIndex, param))), (uint256));
     }
 
-    /// Reads a recent-root reference from the transaction envelope.
-    function recentRootRefLoad(address opcodeLib, uint256 field, uint256 index) internal returns (uint256) {
-        return abi.decode(_call(opcodeLib, abi.encodeCall(IOpcodeLib.recentRootRefLoad, (field, index))), (uint256));
+    /// Reads the `(source_id, root)` of tuple `refIndex` out of the EIP-8272
+    /// recent-root verifier frame at `frameIndex`.
+    ///
+    /// Recent roots used to live in a `recent_root_references` envelope field
+    /// read by a `RECENTROOTREFLOAD` opcode; that opcode is gone (0xB5 is now
+    /// SIGDATACOPY) and the roots are the data of a dedicated VERIFY frame
+    /// targeting `RECENT_ROOT_ADDRESS`, packed as
+    /// `source_id(32) || uint64_be(slot) || root(32)`.
+    function recentRootTuple(address opcodeLib, uint256 frameIndex, uint256 refIndex)
+        internal
+        returns (bytes32 sourceId, bytes32 root)
+    {
+        _requireRecentRootVerifierFrame(opcodeLib, frameIndex, refIndex);
+
+        uint256 offset = refIndex * RECENT_ROOT_TUPLE_BYTES;
+        sourceId = bytes32(frameDataLoad(opcodeLib, offset, frameIndex));
+        // `slot` occupies bytes 32..40 of the tuple, so the root is the word
+        // starting 40 bytes in.
+        root = bytes32(frameDataLoad(opcodeLib, offset + 40, frameIndex));
+    }
+
+    /// Requires that the frame at `frameIndex` is the protocol's recent-root
+    /// verifier frame and carries a tuple at `refIndex`.
+    ///
+    /// @dev These are exactly the conditions of ethrex's
+    ///      `Frame::is_recent_root_verifier`. A frame satisfying them is the
+    ///      canonical verifier frame, which consensus (a) rejects unless it is
+    ///      the transaction's first frame -- or second, behind an expiry
+    ///      verifier -- and (b) checks tuple by tuple against the
+    ///      `RECENT_ROOT_ADDRESS` predeploy before any frame runs. Without the
+    ///      full shape check a caller could point this at some other frame
+    ///      whose data it controls and hand back a forged root.
+    function _requireRecentRootVerifierFrame(address opcodeLib, uint256 frameIndex, uint256 refIndex) private {
+        require(
+            frameParam(opcodeLib, frameIndex, 0x00) == uint256(uint160(RECENT_ROOT_ADDRESS)),
+            "FrameOps: root frame target"
+        );
+        require(frameParam(opcodeLib, frameIndex, 0x02) == VERIFY_MODE, "FrameOps: root frame not VERIFY");
+        require(frameParam(opcodeLib, frameIndex, 0x03) == 0, "FrameOps: root frame flags");
+        require(frameParam(opcodeLib, frameIndex, 0x08) == 0, "FrameOps: root frame value");
+        require(frameParam(opcodeLib, frameIndex, 0x09) == 0, "FrameOps: root frame state gas");
+
+        uint256 length = frameParam(opcodeLib, frameIndex, 0x04);
+        uint256 count = length / RECENT_ROOT_TUPLE_BYTES;
+        require(
+            length % RECENT_ROOT_TUPLE_BYTES == 0 && count != 0 && count <= MAX_RECENT_ROOT_REFERENCES,
+            "FrameOps: root frame data"
+        );
+        require(refIndex < count, "FrameOps: root ref index");
     }
 
     /// Publishes `root` under `salt` as a recent root.

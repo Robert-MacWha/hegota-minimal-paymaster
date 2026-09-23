@@ -64,17 +64,19 @@ pub fn encode_verify(
     salt: [u8; 32],
     leaf_index: U256,
     proof: &[[u8; 32]],
+    root_frame_index: U256,
     root_ref_index: U256,
     sig_index: U256,
 ) -> Result<Bytes> {
     Ok(encode_calldata(
-        "verify(address,uint256,bytes32,uint256,bytes32[],uint256,uint256)",
+        "verify(address,uint256,bytes32,uint256,bytes32[],uint256,uint256,uint256)",
         &[
             Value::Address(owner),
             Value::Uint(amount),
             Value::FixedBytes(Bytes::copy_from_slice(&salt)),
             Value::Uint(leaf_index),
             Value::Array(proof_values(proof)),
+            Value::Uint(root_frame_index),
             Value::Uint(root_ref_index),
             Value::Uint(sig_index),
         ],
@@ -90,11 +92,12 @@ pub fn encode_withdraw(
     salt: [u8; 32],
     leaf_index: U256,
     proof: &[[u8; 32]],
+    root_frame_index: U256,
     root_ref_index: U256,
     sig_index: U256,
 ) -> Result<Bytes> {
     Ok(encode_calldata(
-        "withdraw(address,address,uint256,bytes32,uint256,bytes32[],uint256,uint256)",
+        "withdraw(address,address,uint256,bytes32,uint256,bytes32[],uint256,uint256,uint256)",
         &[
             Value::Address(to),
             Value::Address(owner),
@@ -102,6 +105,7 @@ pub fn encode_withdraw(
             Value::FixedBytes(Bytes::copy_from_slice(&salt)),
             Value::Uint(leaf_index),
             Value::Array(proof_values(proof)),
+            Value::Uint(root_frame_index),
             Value::Uint(root_ref_index),
             Value::Uint(sig_index),
         ],

@@ -17,8 +17,6 @@ interface IOpcodeLib {
 
     function sigParam(uint256 signatureIndex, uint256 param) external returns (uint256);
 
-    function recentRootRefLoad(uint256 field, uint256 index) external returns (uint256);
-
     function txTrace(uint256 in2, uint256 param) external returns (uint256);
 
     function eventDataCopy(uint256 eventIndex, uint256 dataOffset, uint256 length) external returns (bytes memory);

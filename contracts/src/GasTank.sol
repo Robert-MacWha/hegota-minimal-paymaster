@@ -64,10 +64,11 @@ contract GasTank {
         bytes32 salt,
         uint256 leafIndex,
         bytes32[] calldata proof,
+        uint256 rootFrameIndex,
         uint256 rootRefIndex,
         uint256 sigIndex
     ) external {
-        _verify(owner, amount, salt, leafIndex, proof, rootRefIndex, sigIndex);
+        _verify(owner, amount, salt, leafIndex, proof, rootFrameIndex, rootRefIndex, sigIndex);
         _requireSettleThenExecuteFollows(opcodeLib.txParam(0x0A));
         opcodeLib.approve(FrameOps.Scope.ExecutionAndPayment);
     }
@@ -81,10 +82,11 @@ contract GasTank {
         bytes32 salt,
         uint256 leafIndex,
         bytes32[] calldata proof,
+        uint256 rootFrameIndex,
         uint256 rootRefIndex,
         uint256 sigIndex
     ) external {
-        _verify(owner, amount, salt, leafIndex, proof, rootRefIndex, sigIndex);
+        _verify(owner, amount, salt, leafIndex, proof, rootFrameIndex, rootRefIndex, sigIndex);
 
         (bool success,) = to.call{value: amount}("");
         require(success, "GasTank: transfer failed");
@@ -153,6 +155,7 @@ contract GasTank {
         bytes32 salt,
         uint256 leafIndex,
         bytes32[] calldata proof,
+        uint256 rootFrameIndex,
         uint256 rootRefIndex,
         uint256 sigIndex
     ) private {
@@ -161,8 +164,8 @@ contract GasTank {
         require(opcodeLib.sigParam(sigIndex, 0) == uint256(uint160(owner)), "GasTank: bad signature");
         require(opcodeLib.sigParam(sigIndex, 2) == 0, "GasTank: signature must cover whole tx");
 
-        require(opcodeLib.recentRootRefLoad(0, rootRefIndex) == uint256(SOURCE_ID), "GasTank: wrong root source");
-        bytes32 refRoot = bytes32(opcodeLib.recentRootRefLoad(2, rootRefIndex));
+        (bytes32 refSourceId, bytes32 refRoot) = opcodeLib.recentRootTuple(rootFrameIndex, rootRefIndex);
+        require(refSourceId == SOURCE_ID, "GasTank: wrong root source");
         require(MerkleTree.verifyProof(leaf, leafIndex, proof, refRoot), "GasTank: bad proof");
 
         uint256 maxCost = opcodeLib.txParam(0x06);

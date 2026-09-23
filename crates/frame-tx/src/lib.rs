@@ -1,11 +1,7 @@
-pub mod convert;
-pub mod gastank;
-pub mod merkle;
-
 use anyhow::{Context, Result};
 use ethrex_common::types::{
     APPROVE_EXECUTION_AND_PAYMENT, FRAME_SIG_SCHEME_SECP256K1, Frame, FrameMode, FrameSignature,
-    FrameTransaction, RecentRootReference, Transaction,
+    FrameTransaction, RecentRootReference, Transaction, frame_tx_recent_root,
 };
 use ethrex_common::utils::keccak;
 use ethrex_common::{Address, Bytes, H256, U256};
@@ -27,23 +23,59 @@ pub fn address_from_secret_key(secret_key: &SecretKey) -> Address {
     ))
 }
 
-pub fn self_verify_frame(sender: Address, gas_limit: u64) -> Frame {
+pub fn self_verify_frame(sender: Address, gas_limit: u64, state_gas_limit: u64) -> Frame {
     Frame {
         mode: FrameMode::Verify as u8,
         flags: APPROVE_EXECUTION_AND_PAYMENT,
         target: Some(sender),
         gas_limit,
+        state_gas_limit,
         value: U256::zero(),
         data: Bytes::new(),
     }
 }
 
-pub fn sender_frame(target: Address, value: U256, data: Bytes, gas_limit: u64) -> Frame {
+/// EIP-8272 recent-root verifier frame: a VERIFY frame targeting
+/// `RECENT_ROOT_ADDRESS` whose data is one to sixteen packed
+/// `source_id(32) || uint64_be(slot) || root(32)` tuples.
+///
+/// The roots a transaction may reference used to live in a dedicated
+/// `recent_root_references` envelope field; they are now carried as this
+/// frame's data, and it must be the transaction's first frame (or second,
+/// behind an expiry verifier frame). `flags`, `value` and `state_gas_limit`
+/// must all be zero or the node treats it as an ordinary frame and rejects
+/// the transaction for a misplaced verifier.
+pub fn recent_root_frame(references: &[RecentRootReference], gas_limit: u64) -> Frame {
+    let mut data = Vec::with_capacity(references.len() * 72);
+    for reference in references {
+        data.extend_from_slice(reference.source_id.as_bytes());
+        data.extend_from_slice(&reference.slot.to_be_bytes());
+        data.extend_from_slice(reference.root.as_bytes());
+    }
+    Frame {
+        mode: FrameMode::Verify as u8,
+        flags: 0,
+        target: Some(frame_tx_recent_root()),
+        gas_limit,
+        state_gas_limit: 0,
+        value: U256::zero(),
+        data: Bytes::from(data),
+    }
+}
+
+pub fn sender_frame(
+    target: Address,
+    value: U256,
+    data: Bytes,
+    gas_limit: u64,
+    state_gas_limit: u64,
+) -> Frame {
     Frame {
         mode: FrameMode::Sender as u8,
         flags: 0,
         target: Some(target),
         gas_limit,
+        state_gas_limit,
         value,
         data,
     }
@@ -86,7 +118,6 @@ pub struct FrameTxSpec {
     pub nonce_keys: Vec<U256>,
     pub nonce_seq: u64,
     pub frames: Vec<Frame>,
-    pub recent_root_references: Vec<RecentRootReference>,
 }
 
 /// Builds, signs, sends, and confirms a `FrameTransaction` from `spec`.
@@ -116,9 +147,8 @@ pub async fn send_frame_tx(
         sender: spec.sender,
         frames: spec.frames,
         signatures: vec![owner_signature(signer)],
-        max_priority_fee_per_gas,
-        max_fee_per_gas,
-        recent_root_references: spec.recent_root_references,
+        max_priority_fee_per_gas: U256::from(max_priority_fee_per_gas),
+        max_fee_per_gas: U256::from(max_fee_per_gas),
         ..Default::default()
     };
     sign(&mut tx, 0, secret_key);

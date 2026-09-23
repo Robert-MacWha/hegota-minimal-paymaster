@@ -1,9 +1,14 @@
 [package]
-name = "hegota-minimal-erc20-paymaster"
+name = "gastank-cli"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "gastank-cli"
+path = "src/main.rs"
+
 [dependencies]
+frame-tx = { path = "../frame-tx" }
 ethrex-rpc = { git = "https://github.com/lambdaclass/ethrex", branch = "hegota-testnet" }
 ethrex-common = { git = "https://github.com/lambdaclass/ethrex", branch = "hegota-testnet" }
 ethrex-sdk = { git = "https://github.com/lambdaclass/ethrex", branch = "hegota-testnet" }

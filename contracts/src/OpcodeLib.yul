@@ -81,15 +81,6 @@ object "OpcodeLib" {
                 return(0, 32)
             }
 
-            // recentRootRefLoad(uint256,uint256) -> 0xe16864e9. RECENTROOTREFLOAD (0xB5). Stack: [field, index].
-            case 0xe16864e9 {
-                let field := calldataload(4)
-                let index := calldataload(36)
-                let value := verbatim_2i_1o(hex"B5", field, index)
-                mstore(0, value)
-                return(0, 32)
-            }
-
             // txTrace(uint256,uint256) -> 0xb167be16. TXTRACE (0xB6). Stack: [in2, param]. POST_TX frames only.
             case 0xb167be16 {
                 let in2 := calldataload(4)
@@ -118,12 +109,12 @@ object "OpcodeLib" {
                 return(0, 32)
             }
 
-            // sigDataCopy(uint256,uint256,uint256) -> 0x9b547936. SIGDATACOPY (0xBA). Stack: [memOffset, dataOffset, length, signatureIndex]. ARBITRARY-scheme signatures only.
+            // sigDataCopy(uint256,uint256,uint256) -> 0x9b547936. SIGDATACOPY (0xB5). Stack: [memOffset, dataOffset, length, signatureIndex]. ARBITRARY-scheme signatures only.
             case 0x9b547936 {
                 let dataOffset := calldataload(4)
                 let length := calldataload(36)
                 let signatureIndex := calldataload(68)
-                verbatim_4i_0o(hex"BA", 0, dataOffset, length, signatureIndex)
+                verbatim_4i_0o(hex"B5", 0, dataOffset, length, signatureIndex)
                 return(0, length)
             }
 
